@@ -9,7 +9,7 @@ const bot = new TelegramBot(token);
 const ALLOWED_GROUPS = [-1001651594619, -1002497459008];
 const userMessages = {};
 
-// ছবি ডাউনলোড করে আসল QR কোড আছে কি না তা ডিকোড করার ফাংশন
+// ছবি থেকে QR কোড স্ক্যান করার ফাংশন
 async function isQRCodeImage(fileId) {
     try {
         const fileLink = await bot.getFileLink(fileId);
@@ -30,23 +30,15 @@ async function isQRCodeImage(fileId) {
     }
 }
 
-// ৫ মিনিট পর বার্তা ডিলিট করার হেল্পার
-async function sendAutoDeleteMessage(chatId, text) {
-    try {
-        const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-        
-        // Vercel এসিংক্রোনাস ডিলিট
-        const deleteUrl = `https://api.telegram.org/bot${token}/deleteMessage`;
-        
-        setTimeout(() => {
-            axios.post(deleteUrl, {
-                chat_id: chatId,
-                message_id: sentMsg.message_id
-            }).catch(() => {});
+// ৫ মিনিট পর স্বয়ংক্রিয়ভাবে মেসেজ ডিলিট করার ফাংশন
+function sendAutoDeleteMessage(chatId, text) {
+    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).then((sentMsg) => {
+        setTimeout(async () => {
+            try {
+                await bot.deleteMessage(chatId, sentMsg.message_id);
+            } catch (e) {}
         }, 300000); // ৩০০,০০০ মি.সে. = ৫ মিনিট
-    } catch (e) {
-        console.error('Send Auto Delete Error:', e);
-    }
+    }).catch((e) => console.error('Send Auto Delete Error:', e));
 }
 
 module.exports = async (req, res) => {
@@ -66,7 +58,7 @@ module.exports = async (req, res) => {
             const userId = msg.from ? msg.from.id : null;
             const fullName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() : 'ইউজার';
 
-            // ১. নির্দিষ্ট দুটি গ্রুপেই ফিল্টার সীমাবদ্ধ রাখা
+            // ১. নির্দিষ্ট দুটি গ্রুপ চেক করা
             if (!ALLOWED_GROUPS.includes(chatId)) {
                 return res.status(200).send('ok');
             }
@@ -75,7 +67,7 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ২. এডমিনদের স্কিপ করা
+            // ২. এডমিনদের ফিল্টার মুক্ত রাখা
             try {
                 const member = await bot.getChatMember(chatId, userId);
                 if (['creator', 'administrator'].includes(member.status)) {
@@ -96,8 +88,8 @@ module.exports = async (req, res) => {
                         await bot.deleteMessage(chatId, msg.message_id);
                         await bot.banChatMember(chatId, userId);
 
-                        const alertMsg = `🚫 **সিকিউরিটি অ্যালার্ট!**\n\nসম্মানিত সদস্য **${fullName}**, গ্রুপে অনাকাঙ্ক্ষিত QR কোড শেয়ার করার অপরাধে আপনাকে স্থায়ীভাবে ব্যান করা হলো।`;
-                        await sendAutoDeleteMessage(chatId, alertMsg);
+                        const alertMsg = `🚨 **সিকিউরিটি অ্যালার্ট!** 🚨\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n❌ **অপরাধ:** গ্রুপে অনাকাঙ্ক্ষিত QR কোড শেয়ার করার কারণে আপনাকে স্থায়ীভাবে ব্যান করা হলো।`;
+                        sendAutoDeleteMessage(chatId, alertMsg);
                     } catch (e) {
                         console.error('Ban Error:', e);
                     }
@@ -105,31 +97,46 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ৪. ১ ঘণ্টার মধ্যে ডুপ্লিকেট টেক্সট রিপিট ফিল্টার
+            // ৪. ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার, ওয়ার্নিং এবং ৩০ মিনিটের মিউট
             if (msg.text) {
                 const text = msg.text.trim().toLowerCase();
 
                 if (!userMessages[key]) userMessages[key] = [];
 
-                // ১ ঘণ্টার পুরোনো মেসেজ মেমোরি থেকে বাদ দেওয়া
+                // ১ ঘণ্টার পুরোনো তথ্য পরিষ্কার করা
                 userMessages[key] = userMessages[key].filter(
                     item => currentTime - item.time <= 3600
                 );
 
-                const isDuplicate = userMessages[key].some(item => item.text === text);
+                // একই মেসেজ কতবার দেওয়া হয়েছে তা গণনা
+                const duplicateCount = userMessages[key].filter(item => item.text === text).length;
 
-                if (isDuplicate) {
+                if (duplicateCount >= 1) {
                     try {
                         await bot.deleteMessage(chatId, msg.message_id);
 
-                        const warningMsg = `সম্মানিত সদস্য **${fullName}** একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। তৃতীয়বার দেওয়া হলে আপনার বিরুদ্ধে যথাযথ ব্যবস্থা নেওয়ার জন্য আমি আছি।`;
-                        await sendAutoDeleteMessage(chatId, warningMsg);
+                        if (duplicateCount === 1) {
+                            // ১ম বার রিপিট করলে সতর্কবার্তা
+                            const warningMsg = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
+                            sendAutoDeleteMessage(chatId, warningMsg);
+                        } else {
+                            // ২য় বা ৩য় বার রিপিট করলে ৩০ মিনিটের জন্য মিউট
+                            const untilDate = currentTime + 1800; // ৩০ মিনিট (১৮০০ সেকেন্ড)
+                            
+                            await bot.restrictChatMember(chatId, userId, {
+                                can_send_messages: false,
+                                until_date: untilDate
+                            });
+
+                            const muteMsg = `🔇 **অ্যাকশন নেওয়া হয়েছে!** 🔇\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n🛑 বারবার একই বার্তা পুনরায় দেওয়ায় আপনাকে **৩০ মিনিটের জন্য মিউট** করা হলো!`;
+                            sendAutoDeleteMessage(chatId, muteMsg);
+                        }
                     } catch (e) {
-                        console.error('Duplicate Warning Error:', e);
+                        console.error('Duplicate Action Error:', e);
                     }
-                } else {
-                    userMessages[key].push({ text, time: currentTime });
                 }
+
+                userMessages[key].push({ text, time: currentTime });
             }
 
             return res.status(200).send('ok');
