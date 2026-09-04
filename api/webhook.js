@@ -7,7 +7,9 @@ const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token);
 
 const ALLOWED_GROUPS = [-1001651594619, -1002497459008];
-const userMessages = {};
+
+// গ্লোবাল মেসেজ স্টোর
+global.userMessagesStore = global.userMessagesStore || {};
 
 // ছবি থেকে QR কোড স্ক্যান করার ফাংশন
 async function isQRCodeImage(fileId) {
@@ -30,14 +32,14 @@ async function isQRCodeImage(fileId) {
     }
 }
 
-// ৫ মিনিট পর স্বয়ংক্রিয়ভাবে মেসেজ ডিলিট করার ফাংশন
+// ৩০ সেকেন্ড পর স্বয়ংক্রিয়ভাবে মেসেজ ডিলিট করার ফাংশন
 function sendAutoDeleteMessage(chatId, text) {
     bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).then((sentMsg) => {
         setTimeout(async () => {
             try {
                 await bot.deleteMessage(chatId, sentMsg.message_id);
             } catch (e) {}
-        }, 300000); // ৩০০,০০০ মি.সে. = ৫ মিনিট
+        }, 30000); // ৩০,০০০ মিলি সেকেন্ড = ৩০ সেকেন্ড
     }).catch((e) => console.error('Send Auto Delete Error:', e));
 }
 
@@ -67,7 +69,7 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ২. এডমিনদের ফিল্টার মুক্ত রাখা
+            // ২. এডমিনদের বাইপাস করা
             try {
                 const member = await bot.getChatMember(chatId, userId);
                 if (['creator', 'administrator'].includes(member.status)) {
@@ -97,32 +99,32 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ৪. ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার, ওয়ার্নিং এবং ৩০ মিনিটের মিউট
+            // ৪. ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার, ওয়ার্নিং ও ৩০ মিনিটের মিউট
             if (msg.text) {
                 const text = msg.text.trim().toLowerCase();
 
-                if (!userMessages[key]) userMessages[key] = [];
+                if (!global.userMessagesStore[key]) {
+                    global.userMessagesStore[key] = [];
+                }
 
-                // ১ ঘণ্টার পুরোনো তথ্য পরিষ্কার করা
-                userMessages[key] = userMessages[key].filter(
+                // ১ ঘণ্টার (৩৬০০ সেকেন্ড) পুরোনো মেসেজ হিস্ট্রি পরিষ্কার করা
+                global.userMessagesStore[key] = global.userMessagesStore[key].filter(
                     item => currentTime - item.time <= 3600
                 );
 
-                // একই মেসেজ কতবার দেওয়া হয়েছে তা গণনা
-                const duplicateCount = userMessages[key].filter(item => item.text === text).length;
+                const existingIndex = global.userMessagesStore[key].findIndex(item => item.text === text);
 
-                if (duplicateCount >= 1) {
+                if (existingIndex !== -1) {
+                    const existingItem = global.userMessagesStore[key][existingIndex];
                     try {
                         await bot.deleteMessage(chatId, msg.message_id);
 
-                        if (duplicateCount === 1) {
-                            // ১ম বার রিপিট করলে সতর্কবার্তা
-                            const warningMsg = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
+                        if (!existingItem.warned) {
+                            existingItem.warned = true;
+                            const warningMsg = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 ১ ঘণ্টার মধ্যে একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
                             sendAutoDeleteMessage(chatId, warningMsg);
                         } else {
-                            // ২য় বা ৩য় বার রিপিট করলে ৩০ মিনিটের জন্য মিউট
-                            const untilDate = currentTime + 1800; // ৩০ মিনিট (১৮০০ সেকেন্ড)
-                            
+                            const untilDate = currentTime + 1800; // ৩০ মিনিট
                             await bot.restrictChatMember(chatId, userId, {
                                 can_send_messages: false,
                                 until_date: untilDate
@@ -134,9 +136,9 @@ module.exports = async (req, res) => {
                     } catch (e) {
                         console.error('Duplicate Action Error:', e);
                     }
+                } else {
+                    global.userMessagesStore[key].push({ text, time: currentTime, warned: false });
                 }
-
-                userMessages[key].push({ text, time: currentTime });
             }
 
             return res.status(200).send('ok');
