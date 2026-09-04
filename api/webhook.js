@@ -8,7 +8,7 @@ const bot = new TelegramBot(token);
 
 const ALLOWED_GROUPS = [-1001651594619, -1002497459008];
 
-// গ্লোবাল মেসেজ স্টোর
+// ইন-মেমোরি ক্যাশ (১ ঘণ্টার জন্য)
 global.userMessagesStore = global.userMessagesStore || {};
 
 // ছবি থেকে QR কোড স্ক্যান করার ফাংশন
@@ -32,15 +32,14 @@ async function isQRCodeImage(fileId) {
     }
 }
 
-// ৩০ সেকেন্ড পর স্বয়ংক্রিয়ভাবে মেসেজ ডিলিট করার ফাংশন
-function sendAutoDeleteMessage(chatId, text) {
-    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).then((sentMsg) => {
-        setTimeout(async () => {
-            try {
-                await bot.deleteMessage(chatId, sentMsg.message_id);
-            } catch (e) {}
-        }, 30000); // ৩০,০০০ মিলি সেকেন্ড = ৩০ সেকেন্ড
-    }).catch((e) => console.error('Send Auto Delete Error:', e));
+// টেলিগ্রাম মেসেজ ডিলিট করার সেফ ফাংশন
+async function deleteTelegramMessage(chatId, messageId) {
+    try {
+        await axios.post(`https://api.telegram.org/bot${token}/deleteMessage`, {
+            chat_id: chatId,
+            message_id: messageId
+        });
+    } catch (e) {}
 }
 
 module.exports = async (req, res) => {
@@ -60,7 +59,7 @@ module.exports = async (req, res) => {
             const userId = msg.from ? msg.from.id : null;
             const fullName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() : 'ইউজার';
 
-            // ১. নির্দিষ্ট দুটি গ্রুপ চেক করা
+            // ১. নির্দিষ্ট দুটি গ্রুপ চেক
             if (!ALLOWED_GROUPS.includes(chatId)) {
                 return res.status(200).send('ok');
             }
@@ -69,29 +68,38 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ২. এডমিনদের বাইপাস করা
+            // ২. এডমিন চেক
+            let isAdmin = false;
             try {
                 const member = await bot.getChatMember(chatId, userId);
                 if (['creator', 'administrator'].includes(member.status)) {
-                    return res.status(200).send('ok');
+                    isAdmin = true;
                 }
             } catch (e) {}
+
+            // এডমিন হলে কোনো ফিল্টারিং হবে না
+            if (isAdmin) {
+                return res.status(200).send('ok');
+            }
 
             const key = `${chatId}_${userId}`;
             const currentTime = Math.floor(Date.now() / 1000);
 
-            // ৩. QR কোড স্ক্যান ও স্থায়ী ব্যান
+            // ৩. QR কোড প্রসেসিং ও ব্যান
             if (msg.photo && msg.photo.length > 0) {
                 const largestPhoto = msg.photo[msg.photo.length - 1];
                 const hasQR = await isQRCodeImage(largestPhoto.file_id);
 
                 if (hasQR) {
                     try {
-                        await bot.deleteMessage(chatId, msg.message_id);
+                        await deleteTelegramMessage(chatId, msg.message_id);
                         await bot.banChatMember(chatId, userId);
 
                         const alertMsg = `🚨 **সিকিউরিটি অ্যালার্ট!** 🚨\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n❌ **অপরাধ:** গ্রুপে অনাকাঙ্ক্ষিত QR কোড শেয়ার করার কারণে আপনাকে স্থায়ীভাবে ব্যান করা হলো।`;
-                        sendAutoDeleteMessage(chatId, alertMsg);
+                        const sentMsg = await bot.sendMessage(chatId, alertMsg, { parse_mode: 'Markdown' });
+                        
+                        // ৩০ সেকেন্ড পর ডিলিট (ফোর্সেড ওয়েটিং)
+                        setTimeout(() => deleteTelegramMessage(chatId, sentMsg.message_id), 30000);
                     } catch (e) {
                         console.error('Ban Error:', e);
                     }
@@ -99,7 +107,7 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ৪. ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার, ওয়ার্নিং ও ৩০ মিনিটের মিউট
+            // ৪. ১ ঘণ্টার মধ্যে একই মেসেজ রিপিট ফিল্টার
             if (msg.text) {
                 const text = msg.text.trim().toLowerCase();
 
@@ -107,40 +115,53 @@ module.exports = async (req, res) => {
                     global.userMessagesStore[key] = [];
                 }
 
-                // ১ ঘণ্টার (৩৬০০ সেকেন্ড) পুরোনো মেসেজ হিস্ট্রি পরিষ্কার করা
+                // ১ ঘণ্টার (৩৬০০ সেকেন্ড) পুরোনো ইতিহাস মুছে ফেলা
                 global.userMessagesStore[key] = global.userMessagesStore[key].filter(
                     item => currentTime - item.time <= 3600
                 );
 
-                const existingIndex = global.userMessagesStore[key].findIndex(item => item.text === text);
+                const existingItem = global.userMessagesStore[key].find(item => item.text === text);
 
-                if (existingIndex !== -1) {
-                    const existingItem = global.userMessagesStore[key][existingIndex];
+                if (existingItem) {
+                    // একই মেসেজ ১ ঘণ্টার মধ্যে দেওয়া হয়েছে
                     try {
-                        await bot.deleteMessage(chatId, msg.message_id);
+                        await deleteTelegramMessage(chatId, msg.message_id);
 
                         if (!existingItem.warned) {
+                            // প্রথমবার ওয়ার্নিং
                             existingItem.warned = true;
-                            const warningMsg = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 ১ ঘণ্টার মধ্যে একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
-                            sendAutoDeleteMessage(chatId, warningMsg);
+                            const warningText = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 ১ ঘণ্টার মধ্যে একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
+                            const sentMsg = await bot.sendMessage(chatId, warningText, { parse_mode: 'Markdown' });
+                            
+                            // ৩০ সেকেন্ড পর নোটিফিকেশন অটো-ডিলিট
+                            setTimeout(() => deleteTelegramMessage(chatId, sentMsg.message_id), 30000);
                         } else {
-                            const untilDate = currentTime + 1800; // ৩০ মিনিট
+                            // দ্বিতীয়বার ৩০ মিনিটের জন্য মিউট (১৮০০ সেকেন্ড)
+                            const untilDate = currentTime + 1800;
                             await bot.restrictChatMember(chatId, userId, {
-                                can_send_messages: false,
+                                permissions: {
+                                    can_send_messages: false
+                                },
                                 until_date: untilDate
                             });
 
-                            const muteMsg = `🔇 **অ্যাকশন নেওয়া হয়েছে!** 🔇\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n🛑 বারবার একই বার্তা পুনরায় দেওয়ায় আপনাকে **৩০ মিনিটের জন্য মিউট** করা হলো!`;
-                            sendAutoDeleteMessage(chatId, muteMsg);
+                            const muteText = `🔇 **অ্যাকশন নেওয়া হয়েছে!** 🔇\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n🛑 বারবার একই বার্তা পুনরায় দেওয়ায় আপনাকে **৩০ মিনিটের জন্য মিউট** করা হলো!`;
+                            const sentMsg = await bot.sendMessage(chatId, muteText, { parse_mode: 'Markdown' });
+
+                            // ৩০ সেকেন্ড পর নোটিফিকেশন অটো-ডিলিট
+                            setTimeout(() => deleteTelegramMessage(chatId, sentMsg.message_id), 30000);
                         }
                     } catch (e) {
-                        console.error('Duplicate Action Error:', e);
+                        console.error('Duplicate Error:', e);
                     }
                 } else {
+                    // নতুন মেসেজ সেভ করে রাখা
                     global.userMessagesStore[key].push({ text, time: currentTime, warned: false });
                 }
             }
 
+            // ৩০ সেকেন্ড ওয়েট করার সুযোগ দেওয়া যাতে ডিলিট প্রসেস কিল না হয়
+            await new Promise(resolve => setTimeout(resolve, 1000));
             return res.status(200).send('ok');
         } catch (error) {
             console.error('Webhook Error:', error);
