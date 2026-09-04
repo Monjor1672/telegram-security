@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // security secret check (optional but strongly recommended)
+  // security secret check (optional but recommended)
   const secret = process.env.TELEGRAM_SECRET;
   if (secret) {
     const got = req.headers['x-telegram-bot-api-secret-token'];
@@ -10,13 +10,19 @@ export default async function handler(req, res) {
     }
   }
 
-  const update = req.body;
+  let update = req.body;
+  // In some environments body may be a string
+  if (typeof update === 'string') {
+    try { update = JSON.parse(update); } catch (e) { /* ignore */ }
+  }
+
   try {
     // Example: echo back text messages
     if (update && update.message && update.message.text) {
       const chat_id = update.message.chat.id;
       const text = 'Echo: ' + update.message.text;
 
+      // Vercel provides global fetch on Node 18
       await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
