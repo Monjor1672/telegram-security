@@ -3,9 +3,34 @@ const TelegramBot = require('node-telegram-bot-api');
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token);
 
+// নির্দিষ্ট দুটি গ্রুপ আইডি
 const ALLOWED_GROUPS = [-1001651594619, -1002497459008];
 const userMessages = {};
-const userWarnings = {};
+
+function containsQRCode(msg) {
+    if (msg.caption && /qr|scan|code/i.test(msg.caption)) {
+        return true;
+    }
+    return false;
+}
+
+// ওয়ার্নিং মেসেজ পাঠিয়ে ৫ মিনিট (৩০০ সেকেন্ড) পর ডিলিট করার ফাংশন
+async function sendAutoDeleteMessage(chatId, text) {
+    try {
+        const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        
+        // ৫ মিনিট পর ডিলিট করার ব্যাকগ্রাউন্ড টাস্ক
+        setTimeout(async () => {
+            try {
+                await bot.deleteMessage(chatId, sentMsg.message_id);
+            } catch (e) {
+                console.error('Auto delete error:', e);
+            }
+        }, 300000);
+    } catch (e) {
+        console.error('Send message error:', e);
+    }
+}
 
 module.exports = async (req, res) => {
     if (req.method === 'GET') {
@@ -22,7 +47,9 @@ module.exports = async (req, res) => {
             const msg = update.message;
             const chatId = msg.chat.id;
             const userId = msg.from ? msg.from.id : null;
+            const fullName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() : 'ইউজার';
 
+            // ১. শুধুমাত্র নির্দিষ্ট দুটি গ্রুপেই কাজ করবে
             if (!ALLOWED_GROUPS.includes(chatId)) {
                 return res.status(200).send('ok');
             }
@@ -31,7 +58,7 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // Check if user is admin/creator
+            // ২. এডমিন বা ওনারদের ফিল্টার মুক্ত রাখা
             try {
                 const member = await bot.getChatMember(chatId, userId);
                 if (['creator', 'administrator'].includes(member.status)) {
@@ -42,24 +69,27 @@ module.exports = async (req, res) => {
             const key = `${chatId}_${userId}`;
             const currentTime = Math.floor(Date.now() / 1000);
 
-            // 1. QR / Image Check -> Ban User
-            if (msg.photo) {
+            // ৩. QR কোড পাওয়ার পর স্থায়ী ব্যান ও ৫ মিনিটের অ্যালার্ট
+            if (msg.photo && containsQRCode(msg)) {
                 try {
                     await bot.deleteMessage(chatId, msg.message_id);
                     await bot.banChatMember(chatId, userId);
+                    
+                    const alertMsg = `🚫 **সিকিউরিটি অ্যালার্ট!**\n\nপ্রিয় **${fullName}**, গ্রুপে অনাকাঙ্ক্ষিত QR কোড শেয়ার করার অপরাধে আপনাকে স্থায়ীভাবে ব্যান করা হলো।`;
+                    await sendAutoDeleteMessage(chatId, alertMsg);
                 } catch (e) {
                     console.error('Ban Error:', e);
                 }
                 return res.status(200).send('ok');
             }
 
-            // 2. Duplicate Text Check (1 Hour Window)
+            // ৪. ১ ঘণ্টার মধ্যে ডুপ্লিকেট টেক্সটের ক্ষেত্রে ৫ মিনিটের জন্য ওয়ার্নিং
             if (msg.text) {
                 const text = msg.text.trim().toLowerCase();
 
                 if (!userMessages[key]) userMessages[key] = [];
                 
-                // Keep only messages sent in the last 1 hour (3600s)
+                // ১ ঘণ্টার পুরোনো তথ্য পরিষ্কার করা
                 userMessages[key] = userMessages[key].filter(
                     item => currentTime - item.time <= 3600
                 );
@@ -67,23 +97,13 @@ module.exports = async (req, res) => {
                 const isDuplicate = userMessages[key].some(item => item.text === text);
 
                 if (isDuplicate) {
-                    const warnings = (userWarnings[key] || 0) + 1;
-                    userWarnings[key] = warnings;
-
                     try {
                         await bot.deleteMessage(chatId, msg.message_id);
-                    } catch (e) {}
-
-                    if (warnings >= 2) {
-                        try {
-                            await bot.restrictChatMember(chatId, userId, {
-                                can_send_messages: false,
-                                until_date: currentTime + 1800 // Mute for 30 mins
-                            });
-                            userWarnings[key] = 0;
-                        } catch (e) {
-                            console.error('Mute Error:', e);
-                        }
+                        
+                        const warningMsg = `প্রিয় **${fullName}**, একই মেসেজ পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না।`;
+                        await sendAutoDeleteMessage(chatId, warningMsg);
+                    } catch (e) {
+                        console.error('Duplicate Warning Error:', e);
                     }
                 } else {
                     userMessages[key].push({ text, time: currentTime });
