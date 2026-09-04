@@ -1,12 +1,7 @@
 {
-  "name": "telegram-security",
+  "name": "telegram-security-bot",
   "version": "1.0.0",
-  "private": true,
-  "engines": {
-    "node": "18.x"
-  },
-  "scripts": {
-    "dev": "vercel dev"
-  },
-  "dependencies": {}
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  }
 }
