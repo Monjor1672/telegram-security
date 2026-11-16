@@ -12,20 +12,33 @@ const ALLOWED_GROUPS = [-1001651594619, -1002497459008];
 global.userMessagesStore = global.userMessagesStore || {};
 global.lastBotMessageId = global.lastBotMessageId || {};
 
-// ছবি থেকে QR কোড স্ক্যান করার ফাংশন
+// ছবি থেকে সঠিক QR কোড স্ক্যান করার উন্নত ও নির্ভুল ফাংশন (False Positive এড়ানোর জন্য)
 async function isQRCodeImage(fileId) {
     try {
         const fileLink = await bot.getFileLink(fileId);
         const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+        
         const image = await Jimp.read(Buffer.from(response.data));
         
+        // বড় ছবি হলে সাইজ রিসাইজ করা
+        if (image.bitmap.width > 800) {
+            image.resize(800, Jimp.AUTO);
+        }
+
+        // কালার ইমব্যালেন্স বা সাধারণ UI বক্সকে QR ধরা এড়াতে গ্রে-স্কেল ও কন্ট্রাস্ট
+        image.grayscale().contrast(0.2);
+
         const imageData = {
             data: new Uint8ClampedArray(image.bitmap.data),
             width: image.bitmap.width,
             height: image.bitmap.height
         };
 
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        // inversionAttempts বন্ধ রেখে নিখুঁত স্ক্যান নিশ্চিত করা
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "dontInvert"
+        });
+
         return code !== null;
     } catch (e) {
         console.error('QR Scan Error:', e);
@@ -36,22 +49,18 @@ async function isQRCodeImage(fileId) {
 // আগের নোটিফিকেশন ডিলিট করে নতুন নোটিফিকেশন পাঠানোর ফাংশন
 async function sendSingleNotification(chatId, text) {
     try {
-        // ১. মেমোরিতে যদি আগের মেসেজ আইডি থাকে, তবে তা ডিলিট করা
         if (global.lastBotMessageId[chatId]) {
             try {
                 await bot.deleteMessage(chatId, global.lastBotMessageId[chatId]);
             } catch (e) {}
         }
 
-        // ২. নতুন নোটিফিকেশন পাঠানো
         const sentMsg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 
         if (sentMsg && sentMsg.message_id) {
             const currentId = sentMsg.message_id;
             global.lastBotMessageId[chatId] = currentId;
 
-            // ৩. সার্ভার রিসেট হলেও যেন আগের বটের দেওয়া নোটিফিকেশনগুলো মুছে ফেলা যায় (ব্লাইন্ড ক্লিনআপ)
-            // নতুন মেসেজের পেছনের ১০টি আইডি চেক করে বটের মেসেজ ডিলিট করবে
             for (let i = 1; i <= 10; i++) {
                 const targetId = currentId - i;
                 if (targetId > 0) {
@@ -81,7 +90,6 @@ module.exports = async (req, res) => {
             const userId = msg.from ? msg.from.id : null;
             const fullName = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() : 'ইউজার';
 
-            // ১. শুধুমাত্র নির্ধারিত গ্রুপে কাজ করবে
             if (!ALLOWED_GROUPS.includes(chatId)) {
                 return res.status(200).send('ok');
             }
@@ -90,7 +98,6 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ২. এডমিন বাইপাস
             try {
                 const member = await bot.getChatMember(chatId, userId);
                 if (['creator', 'administrator'].includes(member.status)) {
@@ -101,7 +108,7 @@ module.exports = async (req, res) => {
             const key = `${chatId}_${userId}`;
             const currentTime = Math.floor(Date.now() / 1000);
 
-            // ৩. QR কোড স্ক্যান ও ব্যান
+            // QR কোড স্ক্যান ও ব্যান
             if (msg.photo && msg.photo.length > 0) {
                 const largestPhoto = msg.photo[msg.photo.length - 1];
                 const hasQR = await isQRCodeImage(largestPhoto.file_id);
@@ -120,7 +127,7 @@ module.exports = async (req, res) => {
                 return res.status(200).send('ok');
             }
 
-            // ৪. ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার, ওয়ার্নিং ও ৩০ মিনিটের মিউট
+            // ১ ঘণ্টার ডুপ্লিকেট টেক্সট ফিল্টার ও মিউট
             if (msg.text) {
                 const text = msg.text.trim().toLowerCase();
 
@@ -128,7 +135,6 @@ module.exports = async (req, res) => {
                     global.userMessagesStore[key] = [];
                 }
 
-                // ১ ঘণ্টার (৩৬০০ সেকেন্ড) পুরোনো মেসেজ হিস্ট্রি পরিষ্কার করা
                 global.userMessagesStore[key] = global.userMessagesStore[key].filter(
                     item => currentTime - item.time <= 3600
                 );
@@ -144,7 +150,7 @@ module.exports = async (req, res) => {
                             const warningText = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
                             await sendSingleNotification(chatId, warningText);
                         } else {
-                            const untilDate = currentTime + 1800; // ৩০ মিনিট (১৮০০ সেকেন্ড)
+                            const untilDate = currentTime + 1800;
                             await bot.restrictChatMember(chatId, userId, {
                                 permissions: { can_send_messages: false },
                                 until_date: untilDate
