@@ -147,7 +147,7 @@ module.exports = async (req, res) => {
 
                         if (!existingItem.warned) {
                             existingItem.warned = true;
-                            const warningText = `⚠️ **সতর্কবার্তা!** ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 একই বার্তা পুনরায় দিয়ে গ্রুপের পরিবেশ নষ্ট করবেন না। পুনরায় এই কাজ করলে আপনাকে ৩০ মিনিটের জন্য মিউট করা হবে। 🛑`;
+                            const warningText = `⚠️​ গ্রুপ সিকিউরিটি অ্যালার্ট ⚠️\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n📌 নির্দেশনা: গ্রুপে বারবার একই মেসেজ বা স্প্যামিং করা নিষিদ্ধ। অনুগ্রহ করে একই বার্তা বারবার পাঠানো থেকে বিরত থাকুন। অন্যথায় গ্রুপের নিয়ম অনুযায়ী ৩০ মিনিটের মিউট পলিসি কার্যকর করা হবে। 🛑`;
                             await sendSingleNotification(chatId, warningText);
                         } else {
                             const untilDate = currentTime + 1800;
