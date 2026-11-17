@@ -156,7 +156,7 @@ module.exports = async (req, res) => {
                                 until_date: untilDate
                             });
 
-                            const muteText = `🔇 **অ্যাকশন নেওয়া হয়েছে!** 🔇\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n🛑 বারবার একই বার্তা পুনরায় দেওয়ায় আপনাকে **৩০ মিনিটের জন্য মিউট** করা হলো!`;
+                            const muteText = `🔇 **​🔇 মিউট নোটিশ 🔇** 🔇\n\n👤 **সম্মানিত সদস্য:** **${fullName}**\n বারবার একই বার্তা পাঠানোর কারণে আপনাকে ৩০ মিনিটের জন্য মিউট করা হলো। 🛑`;
                             await sendSingleNotification(chatId, muteText);
                         }
                     } catch (e) {
