@@ -1,3 +1,4 @@
+const { handleWelcomeAndGate } = require('./welcome-gate');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const Jimp = require('jimp');
@@ -81,6 +82,8 @@ module.exports = async (req, res) => {
     if (req.method === 'POST') {
         try {
             const update = req.body;
+            const handledByWelcomeGate = await handleWelcomeAndGate(bot, update);
+if (handledByWelcomeGate) return res.status(200).send('ok');
             if (!update || !update.message) {
                 return res.status(200).send('ok');
             }
