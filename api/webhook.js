@@ -84,6 +84,7 @@ module.exports = async (req, res) => {
             const update = req.body;
             const handledByWelcomeGate = await handleWelcomeAndGate(bot, update);
 if (handledByWelcomeGate) return res.status(200).send('ok');
+
             if (!update || !update.message) {
                 return res.status(200).send('ok');
             }
