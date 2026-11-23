@@ -6,6 +6,9 @@ const TARGET_GROUPS = [-1001651594619, -1002497459008];
 // যে দুটি চ্যানেলে ইউজারকে অবশ্যই জয়েন থাকতে হবে
 const REQUIRED_CHANNELS = [-1001941953227, -1002545410106];
 
+// চ্যানেল থেকে বের হয়ে গেলে গ্রুপ থেকেও বের করে দেবেন কি না (true দিলে বের করে দেবে, false দিলে শুধু মেসেজ ডিলিট করবে)
+const KICK_ON_CHANNEL_LEAVE = false;
+
 function buildWelcomeMessage(fullName) {
     return (
         `🎉 স্বাগতম, ${fullName || 'Member'}! ✨\n\n` +
@@ -46,6 +49,41 @@ async function isChannelMember(bot, userId) {
     }
 
     return true;
+}
+
+// গ্রুপে মেসেজ পাঠানোর সময় ইউজার এখনো দুটি চ্যানেলে আছে কি না চেক করা
+async function enforceChannelMembershipOnMessage(bot, msg) {
+    if (!msg || !msg.chat || !msg.from) return false;
+    if (msg.from.is_bot) return false;
+
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!TARGET_GROUPS.includes(chatId)) return false;
+
+    // গ্রুপের অ্যাডমিনদের ছাড় দেওয়া হবে
+    try {
+        const groupMember = await bot.getChatMember(chatId, userId);
+        if (['creator', 'administrator'].includes(groupMember.status)) {
+            return false;
+        }
+    } catch (e) {
+        return false;
+    }
+
+    const inAllChannels = await isChannelMember(bot, userId);
+
+    if (!inAllChannels) {
+        await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+
+        if (KICK_ON_CHANNEL_LEAVE) {
+            await kickWithoutNotification(bot, chatId, userId);
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 async function handleWelcomeAndGate(bot, update) {
@@ -127,4 +165,7 @@ async function handleWelcomeAndGate(bot, update) {
     return false;
 }
 
-module.exports = { handleWelcomeAndGate };
+module.exports = {
+    handleWelcomeAndGate,
+    enforceChannelMembershipOnMessage
+};
