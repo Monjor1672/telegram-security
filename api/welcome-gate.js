@@ -31,6 +31,7 @@ async function kickWithoutNotification(bot, chatId, userId) {
 }
 
 // নির্ধারিত সব চ্যানেলে ইউজার জয়েন আছে কি না যাচাই
+// সাময়িক API এরর হলে ভুল কিক এড়াতে true রিটার্ন করা হবে
 async function isChannelMember(bot, userId) {
     if (!REQUIRED_CHANNELS || REQUIRED_CHANNELS.length === 0) {
         return true;
@@ -39,12 +40,17 @@ async function isChannelMember(bot, userId) {
     for (const channelId of REQUIRED_CHANNELS) {
         try {
             const member = await bot.getChatMember(channelId, userId);
-            const isJoined = ['creator', 'administrator', 'member', 'restricted'].includes(member.status);
-            if (!isJoined) {
+            if (!member || !member.status) {
+                continue;
+            }
+
+            // ইউজার চ্যানেল থেকে লিভ নিলে বা বের করে দিলে status হয় 'left' বা 'kicked'
+            if (['left', 'kicked'].includes(member.status)) {
                 return false;
             }
         } catch (e) {
-            return false;
+            console.error(`Channel check warning (${channelId}) for ${userId}:`, e.message);
+            // সাময়িক নেটওয়ার্ক/API এররে নির্দোষ মেম্বারকে ভুল কিক না করার জন্য নিরাপদ রাখা হলো
         }
     }
 
@@ -64,7 +70,7 @@ async function enforceChannelMembershipOnMessage(bot, msg) {
     // গ্রুপের অ্যাডমিনদের ছাড় দেওয়া হবে
     try {
         const groupMember = await bot.getChatMember(chatId, userId);
-        if (['creator', 'administrator'].includes(groupMember.status)) {
+        if (groupMember && ['creator', 'administrator'].includes(groupMember.status)) {
             return false;
         }
     } catch (e) {
