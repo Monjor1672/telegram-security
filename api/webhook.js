@@ -1,4 +1,4 @@
-const { handleWelcomeAndGate } = require('./welcome-gate');
+const { handleWelcomeAndGate, enforceChannelMembershipOnMessage } = require('./welcome-gate');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const Jimp = require('jimp');
@@ -83,7 +83,7 @@ module.exports = async (req, res) => {
         try {
             const update = req.body;
             const handledByWelcomeGate = await handleWelcomeAndGate(bot, update);
-if (handledByWelcomeGate) return res.status(200).send('ok');
+            if (handledByWelcomeGate) return res.status(200).send('ok');
 
             if (!update || !update.message) {
                 return res.status(200).send('ok');
@@ -108,6 +108,10 @@ if (handledByWelcomeGate) return res.status(200).send('ok');
                     return res.status(200).send('ok');
                 }
             } catch (e) {}
+
+            // চ্যানেল থেকে বের হয়ে গেলে মেসেজ ডিলিট (ও চাইলে কিক)
+            const blockedByChannelGuard = await enforceChannelMembershipOnMessage(bot, msg);
+            if (blockedByChannelGuard) return res.status(200).send('ok');
 
             const key = `${chatId}_${userId}`;
             const currentTime = Math.floor(Date.now() / 1000);
