@@ -6,8 +6,8 @@ const TARGET_GROUPS = [-1001651594619, -1002497459008];
 // যে দুটি চ্যানেলে ইউজারকে অবশ্যই জয়েন থাকতে হবে
 const REQUIRED_CHANNELS = [-1001941953227, -1002545410106];
 
-// চ্যানেল থেকে বের হয়ে গেলে গ্রুপ থেকেও বের করে দেবেন কি না (true দিলে বের করে দেবে, false দিলে শুধু মেসেজ ডিলিট করবে)
-const KICK_ON_CHANNEL_LEAVE = false;
+// চ্যানেল থেকে বের হয়ে গেলে গ্রুপ থেকে শুধু কিক করা হবে (ব্যান হবে না)
+const KICK_ON_CHANNEL_LEAVE = true;
 
 function buildWelcomeMessage(fullName) {
     return (
@@ -20,7 +20,7 @@ function buildWelcomeMessage(fullName) {
     );
 }
 
-// ইউজারনেম না থাকলে বা শর্ত পূরণ না করলে বিনা নোটিফিকেশনে বের করে দেওয়া
+// ব্যান না করে শুধু কিক করার ফাংশন (ban + সাথে সাথে unban)
 async function kickWithoutNotification(bot, chatId, userId) {
     try {
         await bot.banChatMember(chatId, userId);
